@@ -14,14 +14,24 @@ frame_read = tello.get_frame_read()
 def p_controller(error, kp):
     return kp * error
 
-KP_X = 0.05
-KP_Y = 0.05
+KP_X = 0.1
+KP_Y = 0.1
 DEADBAND_X = 20
 DEADBAND_Y = 20
 MAX_CONTROL = 20
+
+airborne = False
+takeoff_requested = False
+
+AXIS_PERIOD_SECONDS = 0.25
+active_axis = "x"
+last_axis_switch = time.monotonic()
+
 try:
+    takeoff_requested = True
     tello.takeoff()
     airborne = True
+    time.sleep(3) # Wait for the drone to stabilize after takeoff
     while True:
         # DJITelloPy supplies frames in RGB order; convert once so the OpenCV
         # masking, drawing, and display code below consistently uses BGR.
@@ -304,14 +314,24 @@ try:
                 1
             )
 
-        # Send a command every frame. When no gate is detected, control_x and
-        # control_y remain zero, explicitly stopping any previous motion.
-        tello.send_rc_control(
-            int(-control_x),
-            forward,
-            int(-control_y),
-            yaw
-        )
+        # Hover-only diagnostic: keep vision running without letting the
+        # detector command any lateral or vertical movement.
+        # Switch between horizontal and vertical correction every 0.25 seconds.
+        if time.monotonic() - last_axis_switch >= AXIS_PERIOD_SECONDS:
+            active_axis = "y" if active_axis == "x" else "x"
+            last_axis_switch = time.monotonic()
+
+        if best_candidate is None:
+            left_right = 0
+            up_down = 0
+        elif active_axis == "x":
+            left_right = int(control_x)
+            up_down = 0
+        else:
+            left_right = 0
+            up_down = int(-control_y)
+
+        tello.send_rc_control(left_right, 0, up_down, 0)
 
         #Show original
         cv2.imshow("frame", frame)
@@ -325,7 +345,7 @@ try:
 
 finally:
     tello.send_rc_control(0, 0, 0, 0)
-    if airborne:
+    if airborne or takeoff_requested:
         tello.land()
     tello.streamoff()
     tello.end()
