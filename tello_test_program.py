@@ -193,8 +193,6 @@ try:
             inner_approx = best_candidate["inner_approx"]
             opening_ratio = best_candidate["opening_ratio"]
 
-            # Keep movement disabled while the detector is being tuned.
-            tello.send_rc_control(int(control_x), forward, int(-control_y), yaw)
             #Draw bounding box
             cv2.rectangle(
                 frame,
@@ -305,6 +303,16 @@ try:
                 (255,255,255),
                 1
             )
+
+        # Send a command every frame. When no gate is detected, control_x and
+        # control_y remain zero, explicitly stopping any previous motion.
+        tello.send_rc_control(
+            int(-control_x),
+            forward,
+            int(-control_y),
+            yaw
+        )
+
         #Show original
         cv2.imshow("frame", frame)
         #show hsv
