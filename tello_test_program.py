@@ -23,13 +23,32 @@ CENTER_Y_OFFSET_GATE = 50  # Adjust this value to shift the vertical center poin
 CENTER_Y_OFFSET = -50  # Adjust this value to shift the vertical center point if needed
 PARTIAL_EDGE_MARGIN = 10
 PARTIAL_GATE_ASPECT = 1.0 # Width to height ration of gate
+
+# Frame counters for alignment detection
 X_ZERO_CONFIRM_FRAMES = 4 # Number of consecutive frames with x error within deadband before considering it zero
 x_zero_frames = 0
+MAX_X_CHANGE_PER_FRAME = 2
+last_left_right = 0
+
+Y_HOLD_FRAMES = 5
+Y_EXIT_TOLERANCE = DEADBAND_Y + 10
+
+y_hold_count = 0
+y_is_aligned = False
+
+
+HOVER_Y_MIN = -210
+HOVER_Y_MAX = -170
+HOVER_CONFIRM_FRAMES = 5
+
+hover_frame_count = 0
+hover_mode = False
+
 
 airborne = False
 takeoff_requested = False
 
-AXIS_PERIOD_SECONDS = 0.18
+AXIS_PERIOD_SECONDS = 0.17
 active_axis = "x"
 last_axis_switch = time.monotonic()
 
@@ -255,10 +274,34 @@ try:
         if best_candidate is not None:
             #Get the best candidate
             center_x = best_candidate["center_x"]
-            center_y = best_candidate["center_y"] + CENTER_Y_OFFSET
+            center_y = best_candidate["center_y"] - CENTER_Y_OFFSET_GATE
             #Calculate error and control signals
             error_x = center_x - image_center_x
             error_y = center_y - image_center_y
+            # Checking if error y is centered within the gate
+            if HOVER_Y_MIN <= error_y <= HOVER_Y_MAX:
+                hover_frame_count += 1
+
+                if hover_frame_count >= HOVER_CONFIRM_FRAMES:
+                    hover_mode = True
+            else:
+                hover_frame_count = 0
+                hover_mode = False
+            # Confirm that the drone has remained at the correct height.
+            if y_is_aligned:
+                # Leave the hold state only if the error becomes clearly too large.
+                if abs(error_y) > Y_EXIT_TOLERANCE:
+                    y_is_aligned = False
+                    y_hold_count = 0
+            else:
+                if abs(error_y) <= DEADBAND_Y:
+                    y_hold_count += 1
+
+                    if y_hold_count >= Y_HOLD_FRAMES:
+                        y_is_aligned = True
+                else:
+                    y_hold_count = 0
+
             if abs(error_x) < DEADBAND_X: #If the x error is within the deadband, set control signal to 0
                 control_x = 0
             else:
@@ -406,27 +449,31 @@ try:
                 1
             )
 
-        # Hover-only diagnostic: keep vision running without letting the
-        # detector command any lateral or vertical movement.
-        # Switch between horizontal and vertical correction every 0.25 seconds.
+
+        # Switch between horizontal and vertical correction phases.
         if time.monotonic() - last_axis_switch >= AXIS_PERIOD_SECONDS:
             active_axis = "y" if active_axis == "x" else "x"
             last_axis_switch = time.monotonic()
 
+        # Select the normal alignment command first.
         if best_candidate is None:
             left_right = 0
             up_down = 0
         elif x_is_aligned:
             left_right = 0
-            up_down = int(np.clip(control_y))  # small vertical correction while focusing on horizontal alignment
+            up_down = int(np.clip(control_y, -MAX_CONTROL, MAX_CONTROL))
+        elif y_is_aligned or hover_mode:
+            # Y is already stable, so keep the full X correction active.
+            left_right = int(control_x)
+            up_down = 0
         elif active_axis == "x":
             left_right = int(control_x)
-            up_down = int(np.clip(control_y*0.25, -2, 2))  # small vertical correction while focusing on horizontal alignment
+            up_down = int(np.clip(control_y * 0.25, -5, 5))
         else:
-            left_right = int(np.clip(control_x*0.25, -2, 2))
+            left_right = int(np.clip(control_x * 0.25, -7, 7))
             up_down = int(control_y)
 
-        tello.send_rc_control(left_right, 0, up_down, 0)
+        tello.send_rc_control(left_right, forward, up_down, 0)
 
         #Show original
         cv2.imshow("frame", frame)
